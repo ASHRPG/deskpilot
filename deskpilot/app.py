@@ -9,6 +9,7 @@ import shlex
 import shutil
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -674,8 +675,75 @@ class DeskPilotApp:
             self.events.put(("voice_error", str(e)))
 
 
+def cli_main():
+    """Run a safe terminal interface when no graphical display is available."""
+    audit = AuditLog(DB_PATH)
+    cancel = threading.Event()
+    policy = PolicyEngine(DEFAULT_ALLOWED)
+    tools = Tools(policy, audit, cancel)
+    planner = Planner(tools, LLMClient())
+    print("DeskPilot terminal mode (no graphical DISPLAY detected). Type 'help' or 'exit'.")
+    print("Approved directories:", ", ".join(str(p) for p in policy.allowed_dirs))
+    while True:
+        try:
+            text = input("deskpilot> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye.")
+            return
+        if not text:
+            continue
+        if text.lower() in {"exit", "quit"}:
+            print("Goodbye.")
+            return
+        audit.message("user", text)
+        try:
+            plan = planner.make_plan(text)
+            if plan.response and not plan.steps:
+                print("DeskPilot:", plan.response)
+                if os.getenv("DESKPILOT_SPEAK_CLI", "0") == "1":
+                    threading.Thread(target=speak, args=(plan.response,), daemon=True).start()
+                continue
+            if not plan.steps:
+                print("DeskPilot: No safe action was generated.")
+                continue
+            results = []
+            for step in plan.steps:
+                decision = policy.evaluate(step)
+                if decision["decision"] == "deny":
+                    raise PermissionError(decision["reason"] + " " + decision["preview"])
+                if decision["decision"] == "require_confirmation":
+                    print("Approval required:", decision["preview"])
+                    answer = input("Approve this action? [y/N] ").strip().lower()
+                    if answer not in {"y", "yes"}:
+                        raise RuntimeError("User declined the action")
+                print("Running:", step.explanation)
+                results.append(tools.run(step))
+            response = "\n\n".join(results)
+            audit.message("assistant", response)
+            print("DeskPilot:", response)
+            if os.getenv("DESKPILOT_SPEAK_CLI", "0") == "1":
+                threading.Thread(target=speak, args=(response,), daemon=True).start()
+        except Exception as exc:
+            audit.event("task_failed", {"error": str(exc)})
+            print("DeskPilot error:", exc)
+
+
 def main():
-    root = tk.Tk()
+    # Codespaces, SSH sessions, CI jobs, and servers often have Tk installed but
+    # no X11/Wayland display. Falling back to the CLI makes `python run.py`
+    # usable instead of crashing with TclError: no display name.
+    headless = sys.platform != "win32" and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if headless or os.environ.get("DESKPILOT_HEADLESS") == "1":
+        cli_main()
+        return
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        if "display" in str(exc).lower():
+            print("No graphical display detected; starting terminal mode.", file=sys.stderr)
+            cli_main()
+            return
+        raise
     DeskPilotApp(root)
     root.mainloop()
 
