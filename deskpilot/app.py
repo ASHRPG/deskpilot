@@ -22,7 +22,7 @@ from typing import Any, Callable, Optional
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from .voice import listen_once
+from .voice import backend_info, listen_once, speak
 
 APP_NAME = "DeskPilot"
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -498,7 +498,7 @@ class DeskPilotApp:
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.current_thread: Optional[threading.Thread] = None
         self._build_ui()
-        self._log("system", "DeskPilot ready. Text mode is available without an API key; optional LLM mode is enabled when OPENAI_API_KEY is configured.")
+        self._log("system", f"DeskPilot ready. Voice replies are local. Speech input backend: {backend_info()}. Text mode works offline without an API key.")
         self.root.after(100, self._drain_events)
 
     def _build_ui(self):
@@ -532,7 +532,9 @@ class DeskPilotApp:
         self.entry.bind("<Return>", lambda _e: self.submit())
         ttk.Button(input_row, text="Send", command=self.submit).pack(side="left", padx=(6, 0))
         ttk.Button(input_row, text="Cancel", command=self.cancel_task).pack(side="left", padx=(6, 0))
-        ttk.Button(input_row, text="Voice", command=self.voice_help).pack(side="left", padx=(6, 0))
+        ttk.Button(input_row, text="Listen", command=self.voice_help).pack(side="left", padx=(6, 0))
+        self.speak_replies = tk.BooleanVar(value=True)
+        ttk.Checkbutton(input_row, text="Speak replies", variable=self.speak_replies).pack(side="left", padx=(6, 0))
 
         ttk.Label(right, text="Current task", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
         self.task_var = tk.StringVar(value="Idle")
@@ -555,6 +557,8 @@ class DeskPilotApp:
         self.chat.insert("end", f"{label}: {text}\n\n")
         self.chat.configure(state="disabled")
         self.chat.see("end")
+        if role == "assistant" and getattr(self, "speak_replies", None) and self.speak_replies.get():
+            threading.Thread(target=speak, args=(text,), daemon=True).start()
 
     def submit(self):
         text = self.command.get().strip()

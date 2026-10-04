@@ -1,0 +1,4 @@
+# Choose one offline STT backend.
+vosk>=0.3.45
+# faster-whisper is optional and heavier; install it separately if preferred:
+# faster-whisper>=1.0.0
