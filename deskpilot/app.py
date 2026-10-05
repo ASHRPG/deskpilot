@@ -503,59 +503,119 @@ class DeskPilotApp:
         self.root.after(100, self._drain_events)
 
     def _build_ui(self):
-        style = ttk.Style()
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        header = ttk.Frame(self.root, padding=12)
-        header.pack(fill="x")
-        ttk.Label(header, text="DeskPilot", font=("TkDefaultFont", 20, "bold")).pack(side="left")
-        status = "LLM connected" if self.llm.available() else "Local safe parser"
-        self.status_var = tk.StringVar(value=status)
-        ttk.Label(header, textvariable=self.status_var).pack(side="right")
+        # A compact dark dashboard keeps the assistant focused: one primary
+        # conversation surface, a visible task state, and safety context.
+        self.colors = {
+            "bg": "#0b1020", "panel": "#11182b", "panel2": "#172039",
+            "border": "#263452", "text": "#eef4ff", "muted": "#91a0bc",
+            "accent": "#6c8cff", "accent2": "#48d7b0", "danger": "#ff6f91",
+        }
+        self.root.configure(bg=self.colors["bg"])
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure("TFrame", background=self.colors["bg"])
+        style.configure("Panel.TFrame", background=self.colors["panel"])
+        style.configure("TLabel", background=self.colors["bg"], foreground=self.colors["text"])
+        style.configure("Muted.TLabel", background=self.colors["bg"], foreground=self.colors["muted"])
+        style.configure("PanelLabel.TLabel", background=self.colors["panel"], foreground=self.colors["text"])
+        style.configure("PanelMuted.TLabel", background=self.colors["panel"], foreground=self.colors["muted"])
+        style.configure("Accent.TButton", background=self.colors["accent"], foreground="white", borderwidth=0, padding=(14, 9))
+        style.map("Accent.TButton", background=[("active", "#829dff")])
+        style.configure("Ghost.TButton", background=self.colors["panel2"], foreground=self.colors["text"], borderwidth=0, padding=(10, 7))
+        style.map("Ghost.TButton", background=[("active", self.colors["border"])])
+        style.configure("TCheckbutton", background=self.colors["panel"], foreground=self.colors["muted"])
+        style.map("TCheckbutton", background=[("active", self.colors["panel"])])
 
-        main = ttk.PanedWindow(self.root, orient="horizontal")
-        main.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        left = ttk.Frame(main, padding=8)
-        right = ttk.Frame(main, padding=8)
-        main.add(left, weight=3)
-        main.add(right, weight=2)
+        shell = tk.Frame(self.root, bg=self.colors["bg"])
+        shell.pack(fill="both", expand=True)
+        sidebar = tk.Frame(shell, bg="#0e1527", width=220)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+        tk.Label(sidebar, text="◈  DESKPILOT", bg="#0e1527", fg=self.colors["text"], font=("TkDefaultFont", 15, "bold")).pack(anchor="w", padx=20, pady=(24, 5))
+        tk.Label(sidebar, text="Your personal computer copilot", bg="#0e1527", fg=self.colors["muted"], font=("TkDefaultFont", 9)).pack(anchor="w", padx=20, pady=(0, 26))
+        for label, icon in (("  Command center", "⌂"), ("  Activity log", "◷"), ("  Permissions", "✓"), ("  Voice & offline", "◉")):
+            tk.Label(sidebar, text=f"{icon}{label}", bg="#0e1527", fg=self.colors["muted"], anchor="w", font=("TkDefaultFont", 10)).pack(fill="x", padx=20, pady=10)
+        tk.Frame(sidebar, bg=self.colors["border"], height=1).pack(fill="x", padx=20, pady=18)
+        tk.Label(sidebar, text="SAFE EXECUTION", bg="#0e1527", fg=self.colors["muted"], font=("TkDefaultFont", 8, "bold")).pack(anchor="w", padx=20)
+        tk.Label(sidebar, text="●  Policy gate active", bg="#0e1527", fg=self.colors["accent2"], font=("TkDefaultFont", 9)).pack(anchor="w", padx=20, pady=(8, 4))
+        tk.Label(sidebar, text="●  Audit trail enabled", bg="#0e1527", fg=self.colors["accent2"], font=("TkDefaultFont", 9)).pack(anchor="w", padx=20)
+        tk.Label(sidebar, text="Offline mode available", bg="#0e1527", fg=self.colors["muted"], font=("TkDefaultFont", 8)).pack(anchor="w", padx=20, pady=(16, 0))
 
-        ttk.Label(left, text="Conversation", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
-        self.chat = scrolledtext.ScrolledText(left, wrap="word", state="disabled", height=25, font=("TkDefaultFont", 10))
-        self.chat.pack(fill="both", expand=True, pady=(6, 8))
-        input_row = ttk.Frame(left)
-        input_row.pack(fill="x")
+        content = tk.Frame(shell, bg=self.colors["bg"])
+        content.pack(side="left", fill="both", expand=True, padx=24, pady=20)
+        top = tk.Frame(content, bg=self.colors["bg"])
+        top.pack(fill="x", pady=(0, 18))
+        tk.Label(top, text="Good to see you.", bg=self.colors["bg"], fg=self.colors["text"], font=("TkDefaultFont", 22, "bold")).pack(side="left")
+        self.status_var = tk.StringVar(value="Local safe parser")
+        tk.Label(top, textvariable=self.status_var, bg=self.colors["bg"], fg=self.colors["accent2"], font=("TkDefaultFont", 10, "bold")).pack(side="right", pady=8)
+
+        cards = tk.Frame(content, bg=self.colors["bg"])
+        cards.pack(fill="x", pady=(0, 16))
+        self._metric_card(cards, "TASK STATE", "Idle", "task_metric", self.colors["accent"])
+        self._metric_card(cards, "VOICE", "Ready", "voice_metric", self.colors["accent2"])
+        self._metric_card(cards, "POLICY", "Protected", "policy_metric", self.colors["accent2"])
+        self._metric_card(cards, "MODE", "Offline-ready", "mode_metric", self.colors["accent"])
+
+        main = tk.Frame(content, bg=self.colors["bg"])
+        main.pack(fill="both", expand=True)
+        left = tk.Frame(main, bg=self.colors["panel"], highlightbackground=self.colors["border"], highlightthickness=1)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 14))
+        tk.Label(left, text="Assistant", bg=self.colors["panel"], fg=self.colors["text"], font=("TkDefaultFont", 13, "bold")).pack(anchor="w", padx=18, pady=(16, 0))
+        tk.Label(left, text="Tell me what you want to accomplish.", bg=self.colors["panel"], fg=self.colors["muted"], font=("TkDefaultFont", 9)).pack(anchor="w", padx=18, pady=(2, 8))
+        self.chat = scrolledtext.ScrolledText(left, wrap="word", state="disabled", height=22, bg="#0d1425", fg=self.colors["text"], insertbackground="white", selectbackground=self.colors["accent"], relief="flat", borderwidth=0, padx=14, pady=12, font=("TkDefaultFont", 10))
+        self.chat.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        self.chat.tag_configure("user", foreground="#9fb6ff")
+        self.chat.tag_configure("assistant", foreground="#a3f1d9")
+        input_area = tk.Frame(left, bg=self.colors["panel"])
+        input_area.pack(fill="x", padx=12, pady=(0, 12))
         self.command = tk.StringVar()
-        self.entry = ttk.Entry(input_row, textvariable=self.command)
-        self.entry.pack(side="left", fill="x", expand=True)
+        self.entry = tk.Entry(input_area, textvariable=self.command, bg=self.colors["panel2"], fg=self.colors["text"], insertbackground="white", relief="flat", font=("TkDefaultFont", 11))
+        self.entry.pack(side="left", fill="x", expand=True, ipady=10, padx=(0, 8))
         self.entry.bind("<Return>", lambda _e: self.submit())
-        ttk.Button(input_row, text="Send", command=self.submit).pack(side="left", padx=(6, 0))
-        ttk.Button(input_row, text="Cancel", command=self.cancel_task).pack(side="left", padx=(6, 0))
-        ttk.Button(input_row, text="Listen", command=self.voice_help).pack(side="left", padx=(6, 0))
+        ttk.Button(input_area, text="Send  ↵", style="Accent.TButton", command=self.submit).pack(side="left")
+        ttk.Button(input_area, text="Listen  ◉", style="Ghost.TButton", command=self.voice_help).pack(side="left", padx=(6, 0))
         self.speak_replies = tk.BooleanVar(value=True)
-        ttk.Checkbutton(input_row, text="Speak replies", variable=self.speak_replies).pack(side="left", padx=(6, 0))
+        ttk.Checkbutton(input_area, text="Speak", variable=self.speak_replies).pack(side="left", padx=(8, 0))
+        self.entry.focus_set()
 
-        ttk.Label(right, text="Current task", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
-        self.task_var = tk.StringVar(value="Idle")
-        ttk.Label(right, textvariable=self.task_var, wraplength=350).pack(anchor="w", pady=(6, 12))
-        ttk.Label(right, text="Approved directories", font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
-        self.dirs = tk.Listbox(right, height=5)
-        self.dirs.pack(fill="x", pady=5)
+        right = tk.Frame(main, bg=self.colors["panel"], width=285, highlightbackground=self.colors["border"], highlightthickness=1)
+        right.pack(side="left", fill="y")
+        right.pack_propagate(False)
+        tk.Label(right, text="Quick actions", bg=self.colors["panel"], fg=self.colors["text"], font=("TkDefaultFont", 12, "bold")).pack(anchor="w", padx=16, pady=(16, 4))
+        tk.Label(right, text="Start with one tap or type anything.", bg=self.colors["panel"], fg=self.colors["muted"], font=("TkDefaultFont", 9)).pack(anchor="w", padx=16, pady=(0, 10))
+        for label, command in (("System status", "system status"), ("List open windows", "list windows"), ("Show my downloads", "list my downloads"), ("Find a file", "find report in Downloads"), ("Open a website", "open https://example.com"), ("Help me", "help")):
+            ttk.Button(right, text=label, style="Ghost.TButton", command=lambda c=command: self.quick_action(c)).pack(fill="x", padx=14, pady=3)
+        tk.Frame(right, bg=self.colors["border"], height=1).pack(fill="x", padx=16, pady=16)
+        tk.Label(right, text="Current task", bg=self.colors["panel"], fg=self.colors["muted"], font=("TkDefaultFont", 9, "bold")).pack(anchor="w", padx=16)
+        self.task_var = tk.StringVar(value="Idle — ready for your command")
+        tk.Label(right, textvariable=self.task_var, bg=self.colors["panel"], fg=self.colors["text"], wraplength=240, justify="left", font=("TkDefaultFont", 10)).pack(anchor="w", padx=16, pady=(5, 10))
+        ttk.Button(right, text="Cancel active task", style="Ghost.TButton", command=self.cancel_task).pack(fill="x", padx=14)
+        tk.Frame(right, bg=self.colors["border"], height=1).pack(fill="x", padx=16, pady=16)
+        tk.Label(right, text="Approved locations", bg=self.colors["panel"], fg=self.colors["muted"], font=("TkDefaultFont", 9, "bold")).pack(anchor="w", padx=16)
+        self.dirs = tk.Listbox(right, height=4, bg=self.colors["panel2"], fg=self.colors["muted"], selectbackground=self.colors["accent"], relief="flat", borderwidth=0, font=("TkDefaultFont", 8))
+        self.dirs.pack(fill="x", padx=14, pady=6)
         for p in self.policy.allowed_dirs:
             self.dirs.insert("end", str(p))
-        ttk.Button(right, text="Add approved directory", command=self.add_directory).pack(anchor="w")
-        ttk.Label(right, text="Recent audit events", font=("TkDefaultFont", 11, "bold")).pack(anchor="w", pady=(15, 4))
-        self.audit_view = scrolledtext.ScrolledText(right, wrap="word", height=15, state="disabled", font=("TkDefaultFont", 9))
-        self.audit_view.pack(fill="both", expand=True)
-        ttk.Button(right, text="Refresh audit log", command=self.refresh_audit).pack(anchor="e", pady=(5, 0))
+        ttk.Button(right, text="+ Add location", style="Ghost.TButton", command=self.add_directory).pack(fill="x", padx=14)
+
+    def _metric_card(self, parent, title, value, attr, color):
+        card = tk.Frame(parent, bg=self.colors["panel"], highlightbackground=self.colors["border"], highlightthickness=1)
+        card.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        tk.Label(card, text=title, bg=self.colors["panel"], fg=self.colors["muted"], font=("TkDefaultFont", 8, "bold")).pack(anchor="w", padx=12, pady=(9, 1))
+        var = tk.StringVar(value=value)
+        setattr(self, attr, var)
+        tk.Label(card, textvariable=var, bg=self.colors["panel"], fg=color, font=("TkDefaultFont", 11, "bold")).pack(anchor="w", padx=12, pady=(0, 9))
+
+    def quick_action(self, command):
+        self.command.set(command)
+        self.submit()
 
     def _log(self, role: str, text: str):
         self.audit.message(role, text)
         self.chat.configure(state="normal")
         label = "You" if role == "user" else "DeskPilot" if role == "assistant" else "System"
-        self.chat.insert("end", f"{label}: {text}\n\n")
+        tag = role if role in {"user", "assistant"} else "system"
+        self.chat.insert("end", f"{label}: {text}\n\n", tag)
         self.chat.configure(state="disabled")
         self.chat.see("end")
         if role == "assistant" and getattr(self, "speak_replies", None) and self.speak_replies.get():
@@ -569,6 +629,8 @@ class DeskPilotApp:
         self._log("user", text)
         self.cancel.clear()
         self.task_var.set("Understanding command…")
+        self.task_metric.set("Planning")
+        self.policy_metric.set("Protected")
         self.current_thread = threading.Thread(target=self._worker, args=(text,), daemon=True)
         self.current_thread.start()
 
@@ -610,31 +672,41 @@ class DeskPilotApp:
                 kind, payload = self.events.get_nowait()
                 if kind == "answer":
                     self.task_var.set("Completed")
+                    self.task_metric.set("Complete")
                     self._log("assistant", payload)
                 elif kind == "plan":
                     self.task_var.set(f"Plan created: {len(payload.steps)} step(s)")
+                    self.task_metric.set(f"{len(payload.steps)} step(s)")
                 elif kind == "step":
                     self.task_var.set(payload)
+                    self.task_metric.set("Executing")
                 elif kind == "approval":
                     step, decision, answer = payload
                     self.task_var.set("Waiting for approval")
+                    self.task_metric.set("Approval")
+                    self.policy_metric.set("Review needed")
                     prompt = f"{decision['reason']}\n\n{decision['preview']}\n\nRisk: {PolicyEngine.RISK_NAMES.get(decision['risk'], 'unknown')}"
                     approved = messagebox.askyesno("DeskPilot approval required", prompt, parent=self.root)
                     answer.put(approved)
                 elif kind == "done":
                     self.task_var.set("Completed")
+                    self.task_metric.set("Complete")
+                    self.policy_metric.set("Protected")
                     self._log("assistant", payload)
                     self.refresh_audit()
                 elif kind == "error":
                     self.task_var.set("Failed or cancelled")
+                    self.task_metric.set("Stopped")
                     self._log("assistant", f"I could not complete the task: {payload}")
                     self.refresh_audit()
                 elif kind == "voice":
                     self.command.set(payload)
                     self.task_var.set("Voice command captured")
+                    self.voice_metric.set("Captured")
                     self.submit()
                 elif kind == "voice_error":
                     self.task_var.set("Voice input unavailable")
+                    self.voice_metric.set("Unavailable")
                     messagebox.showwarning("Voice input", payload, parent=self.root)
         except queue.Empty:
             pass
